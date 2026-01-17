@@ -4,6 +4,30 @@ public unsafe class PlayerController : MonoBehaviour
 {
     public PlayerProcessor processor;
 
+    [Header("Animations")]
+    public Animator animator;
+    public Transform model;
+
+    // Animator parameters
+    public string animid_speed = "Speed";
+    public string animid_velocityX = "VelocityX";
+    public string animid_velocityY = "VelocityY";
+    public string animid_jump = "Jump";
+    public string animid_grounded = "Grounded";
+    public string animid_freeFall = "FreeFall";
+    public string animid_motionSpeed = "MotionSpeed";
+    public string animid_attack = "Attack";
+
+    public float jumpIntervalTime = 0.5f;
+    bool canJump;
+    float groundedTimer;        // Updated in fixed update
+    public float attackIntervalTime = 1.5f;
+    bool canAttack;
+    float attackIntervalTimer;  // Updated in dynamic update
+
+    float velocityX;
+    float velocityY;
+
     [Header("Jumping")]
     public LayerMask groundLayer;
     public LayerMask playerLayer;
@@ -31,14 +55,43 @@ public unsafe class PlayerController : MonoBehaviour
     {
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
+
+        groundedTimer = jumpIntervalTime;
+        attackIntervalTimer = attackIntervalTime;
     }
 
     void Update()
     {
+        attackIntervalTimer += Time.deltaTime;
+        DynamicUpdateInput(processor.inputData);
+
         fixed (PlayerData* playerData = &processor.playerData)
         {
             UpdatePosition(playerData);
+            UpdateAnimator(processor.inputData, playerData);
         }
+    }
+
+    void DynamicUpdateInput(InputData inputData)
+    {
+        canAttack = attackIntervalTimer > attackIntervalTime;
+
+        if (inputData.Attack && canAttack)
+        {
+            OnAttack();
+        }
+    }
+
+    void UpdateAnimator(InputData inputData, PlayerData* playerData)
+    {
+        animator.SetFloat(animid_speed, movement.magnitude);
+        animator.SetFloat(animid_velocityX, velocityX = Mathf.Lerp(velocityX, movement.x / playerData->Speed, 0.01f));
+        animator.SetFloat(animid_velocityY, velocityY = Mathf.Lerp(velocityY, movement.z / playerData->Speed, 0.01f));
+        animator.SetBool(animid_jump, inputData.Jump && canJump);
+        animator.SetBool(animid_grounded, grounded);
+        animator.SetBool(animid_freeFall, !grounded && !(inputData.Jump && canJump));
+        animator.SetFloat(animid_motionSpeed, inputData.MoveDelta.magnitude);
+        animator.SetBool(animid_attack, inputData.Attack && canAttack);
     }
 
     void UpdatePosition(PlayerData* playerData)
@@ -58,10 +111,7 @@ public unsafe class PlayerController : MonoBehaviour
         }
 
         // Interpolate between current position and desired position
-        //transform.position = playerData->Position;
         transform.position = Vector3.Lerp(transform.position, playerData->Position, GameManager.InterpolationConstant);
-        Debug.Log(transform.position);
-        Debug.Log(playerData->Position);
     }
 
     // Called 50 times per second
@@ -106,7 +156,15 @@ public unsafe class PlayerController : MonoBehaviour
 
     public void Move(InputData inputData, PlayerData* playerData)
     {
+        canJump = groundedTimer > jumpIntervalTime && grounded;
+
         if (grounded)
+        {
+            // Update canJump
+            groundedTimer += Time.fixedDeltaTime;
+        }
+        
+        if (grounded && attackIntervalTimer > attackIntervalTime)
         {
             // Parse input
             Vector2 moveDelta = inputData.MoveDelta;
@@ -121,24 +179,27 @@ public unsafe class PlayerController : MonoBehaviour
                 movement *= playerData->SprintSpeedMultiplier;
             }
 
-            // Rotate movement vector to face in the camera direction
-            movement = camAnchor.rotation * movement;
-
             // Jump
-            if (inputData.Jump)
+            if (inputData.Jump && canJump)
             {
                 Jump(&playerData->Velocity, playerData->JumpForce);
             }
         }
 
+        if (attackIntervalTimer < attackIntervalTime)
+        {
+            movement = Vector3.zero;
+        }
+
         // Update respective processor's Position variable to equal desired position
-        movement = transform.TransformDirection(movement);
-        processor.Move(movement);
+        // Transform the direction based on the camera anchor so that forward = viewport forward
+        processor.Move(camAnchor.TransformDirection(movement));
     }
 
     void Jump(Vector3* velocity, float jumpForce, bool cancelVerticalVelocity = true)
     {
         grounded = false;
+        groundedTimer = 0;
 
         if (cancelVerticalVelocity)
         {
@@ -179,6 +240,12 @@ public unsafe class PlayerController : MonoBehaviour
         camHandle.localPosition = cameraPosition;
 
         camAnchor.rotation = Quaternion.Euler(0, lookAngles.x, 0);
+        model.rotation = camAnchor.rotation;
         camHandle.localRotation = Quaternion.Euler(lookAngles.y, 0, 0);
+    }
+
+    void OnAttack()
+    {
+        attackIntervalTimer = 0;
     }
 }
